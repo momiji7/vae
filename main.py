@@ -15,10 +15,10 @@ tfboard_writer = SummaryWriter()
 parser = argparse.ArgumentParser()
 parser.add_argument("--img_size",     default=28, type=int,   help="size of image")
 parser.add_argument("--latent_dim",   default=10, type=int,    help="dimension of latent space")
-parser.add_argument("--batch_size",   default=8,  type=int,  help="minibatch size")
-parser.add_argument("--epoch",        default=20, type=int,    help="training epoch")
-parser.add_argument("--encoder_lr",   default=1e-7,type=float,  help="learning rate")
-parser.add_argument("--decoder_lr",   default=1e-7,type=float,  help="learning rate")
+parser.add_argument("--batch_size",   default=128,  type=int,  help="minibatch size")
+parser.add_argument("--epoch",        default=10, type=int,    help="training epoch")
+parser.add_argument("--encoder_lr",   default=1e-3,type=float,  help="learning rate")
+parser.add_argument("--decoder_lr",   default=1e-3,type=float,  help="learning rate")
 parser.add_argument("--sample_times", default=1  ,type=int,    help="MC sample times")
 parser.add_argument("--test_latent_num", default=10  ,type=int,    help="the number of latent space in test stage")
 parser.add_argument("--test_sample_times", default=10  ,type=int,  help="sample times in test stage")
@@ -39,10 +39,10 @@ vae_decoder = decoder(args)
 train_dataset = vae_dataset(args)
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = args.batch_size, shuffle=True, num_workers=8, pin_memory=True)
 
-opt_encoder = torch.optim.SGD(vae_encoder.parameters(), lr=args.encoder_lr, momentum=0.9, weight_decay=0.0005)
+opt_encoder = torch.optim.Adam(vae_encoder.parameters(), lr=args.encoder_lr)
 sch_encoder = torch.optim.lr_scheduler.StepLR(opt_encoder, step_size=20, gamma=0.1)
 
-opt_decoder = torch.optim.SGD(vae_decoder.parameters(), lr=args.decoder_lr, momentum=0.9, weight_decay=0.0005)
+opt_decoder = torch.optim.Adam(vae_decoder.parameters(), lr=args.decoder_lr)
 sch_decoder = torch.optim.lr_scheduler.StepLR(opt_decoder, step_size=20, gamma=0.1)
 
 vae_decoder = vae_decoder.cuda()
@@ -85,10 +85,12 @@ for ep in range(start_epoch, args.epoch):
         noise = noise.cuda()
         
         z_mu, z_sig = vae_encoder(img) # z_mu , z_sig : N*1*Dz
-        zl = torch.sqrt(z_sig) * noise + z_mu      # zl           : N*L*Dz
-        x_mu, x_sig = vae_decoder(zl)  # x_mu , x_sig : N*L*Dx
+        zl = torch.exp(0.5*z_sig) * noise + z_mu      # zl           : N*L*Dz
+        x_ber = vae_decoder(zl)  # N*L*Dx
       
-        encoder_loss, decoder_loss = vae_loss(img, x_mu, x_sig, z_mu, z_sig)
+        #encoder_loss, decoder_loss = vae_loss(img, x_mu, x_sig, z_mu, z_sig)
+        
+        encoder_loss, decoder_loss = vae_loss(img, x_ber, z_mu, z_sig)
         
         encoder_losses.update(encoder_loss.item())
         decoder_losses.update(decoder_loss.item())
@@ -134,17 +136,14 @@ for ep in range(start_epoch, args.epoch):
         vae_encoder.eval()
         vae_decoder.eval()
         for itest in range(args.test_latent_num):
-            z = torch.randn(1, args.latent_dim).cuda()
-            x_mu, x_sig = vae_decoder(z) # 1*Dx
 
-            
-            n = torch.randn(args.test_sample_times, args.img_size*args.img_size).cuda()
-            x_systhesis = n * torch.sqrt(x_sig) + x_mu # ST*Dx
+            z = torch.randn(args.test_sample_times, args.latent_dim).cuda()
+            x_systhesis = vae_decoder(z)             
             x_systhesis = x_systhesis.reshape(args.test_sample_times, args.img_size, args.img_size)
             x_systhesis = x_systhesis.to(torch.device('cpu'))
             x_systhesis = x_systhesis.numpy()
             for isample in range(args.test_sample_times):
-                img[itest*args.img_size:(itest+1)*args.img_size, isample*args.img_size:(isample+1)*args.img_size] = x_systhesis[isample] * 0.3081 + 0.1307
+                img[itest*args.img_size:(itest+1)*args.img_size, isample*args.img_size:(isample+1)*args.img_size] = x_systhesis[isample]
 
     scipy.misc.toimage(img,cmin=0.0,cmax=1.0).save('{}/epoch_{:03d}_sample.jpg'.format(logger.path('model'), ep))
    
